@@ -9,31 +9,32 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 app = Flask(__name__)
 
-# Словари для хранения списков файлов пользователей
-user_books = {}
-user_music = {}
+# Твой Telegram ID как администратора 👑
+ADMIN_ID = 7932204371
+
+# Общие списки для всех пользователей 🌍
+all_books = []
+all_music = []
 
 # Главное меню (кнопки под клавиатурой)
 def get_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.row("📚 Мои Книги (PDF)", "💡 Случайный факт")
-    keyboard.row("🌦️ Погода", "🎵 Моя Музыка (MP3)")
+    keyboard.row("📚 Общие Книги (PDF)", "💡 Случайный факт")
+    keyboard.row("🌦️ Погода", "🎵 Общая Музыка (MP3)")
     return keyboard
 
 # Меню со списком книг
-def get_books_keyboard(chat_id):
+def get_books_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    books = user_books.get(chat_id, [])
-    for book in books:
+    for book in all_books:
         keyboard.add(types.KeyboardButton(text=f"📖 {book['name']}"))
     keyboard.add(types.KeyboardButton(text="🏠 Главное меню"))
     return keyboard
 
 # Меню со списком музыки
-def get_music_keyboard(chat_id):
+def get_music_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    tracks = user_music.get(chat_id, [])
-    for track in tracks:
+    for track in all_music:
         keyboard.add(types.KeyboardButton(text=f"🎧 {track['name']}"))
     keyboard.add(types.KeyboardButton(text="🏠 Главное меню"))
     return keyboard
@@ -42,36 +43,38 @@ def get_music_keyboard(chat_id):
 def start_message(message):
     bot.send_message(
         message.chat.id, 
-        "Привет! Выбери раздел ниже или отправь мне PDF / MP3 файл! 👇", 
+        "Привет! Выбери раздел ниже👇", 
         reply_markup=get_main_keyboard()
     )
 
-# Обработка документов (PDF)
+# Обработка документов (PDF) — Только для админа 🔒
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
+    if message.chat.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ Загружать файлы в библиотеку может только администратор.")
+        return
+
     if message.document.mime_type == 'application/pdf':
-        chat_id = message.chat.id
         file_id = message.document.file_id
         file_name = message.document.file_name or "Книга.pdf"
         
-        if chat_id not in user_books:
-            user_books[chat_id] = []
-        user_books[chat_id].append({'file_id': file_id, 'name': file_name})
-        bot.reply_to(message, f"📚 Книга **«{file_name}»** сохранена!", parse_mode="Markdown", reply_markup=get_main_keyboard())
+        all_books.append({'file_id': file_id, 'name': file_name})
+        bot.reply_to(message, f"📚 Книга **«{file_name}»** добавлена в общую библиотеку!", parse_mode="Markdown", reply_markup=get_main_keyboard())
     else:
         bot.reply_to(message, "Пожалуйста, отправь файл в формате PDF.")
 
-# Обработка аудио (MP3)
+# Обработка аудио (MP3) — Только для админа 🔒
 @bot.message_handler(content_types=['audio'])
 def handle_audio(message):
-    chat_id = message.chat.id
+    if message.chat.id != ADMIN_ID:
+        bot.reply_to(message, "⛔ Загружать музыку в библиотеку может только администратор.")
+        return
+
     file_id = message.audio.file_id
     track_name = message.audio.title or message.audio.file_name or "Аудиозапись"
     
-    if chat_id not in user_music:
-        user_music[chat_id] = []
-    user_music[chat_id].append({'file_id': file_id, 'name': track_name})
-    bot.reply_to(message, f"🎵 Трек **«{track_name}»** сохранён!", parse_mode="Markdown", reply_markup=get_main_keyboard())
+    all_music.append({'file_id': file_id, 'name': track_name})
+    bot.reply_to(message, f"🎵 Трек **«{track_name}»** сохранён в общую библиотеку!", parse_mode="Markdown", reply_markup=get_main_keyboard())
 
 # Обработка текстовых команд и нажатий на кнопки
 @bot.message_handler(func=lambda message: True)
@@ -96,26 +99,23 @@ def handle_text(message):
     elif text == "🌦️ Погода":
         bot.send_message(chat_id, "🌦️ Напиши название города в чат (например: *Ташкент*):", parse_mode="Markdown")
 
-    elif text == "📚 Мои Книги (PDF)":
-        books = user_books.get(chat_id, [])
-        if not books:
-            bot.send_message(chat_id, "📚 У тебя нет сохранённых PDF-книг. Отправь мне PDF-файл!", reply_markup=get_main_keyboard())
+    elif text == "📚 Общие Книги (PDF)":
+        if not all_books:
+            bot.send_message(chat_id, "📚 Библиотека пока пуста. Администратор ещё не добавил книги.", reply_markup=get_main_keyboard())
         else:
-            bot.send_message(chat_id, "📚 Выбери нужную книгу из списка ниже:", reply_markup=get_books_keyboard(chat_id))
+            bot.send_message(chat_id, "📚 Выбери нужную книгу из списка ниже:", reply_markup=get_books_keyboard())
 
-    elif text == "🎵 Моя Музыка (MP3)":
-        tracks = user_music.get(chat_id, [])
-        if not tracks:
-            bot.send_message(chat_id, "🎵 У тебя нет сохранённых MP3-треков. Отправь мне MP3-файл!", reply_markup=get_main_keyboard())
+    elif text == "🎵 Общая Музыка (MP3)":
+        if not all_music:
+            bot.send_message(chat_id, "🎵 Список музыки пока пуст. Администратор ещё не добавил треки.", reply_markup=get_main_keyboard())
         else:
-            bot.send_message(chat_id, "🎵 Выбери нужный трек из списка ниже:", reply_markup=get_music_keyboard(chat_id))
+            bot.send_message(chat_id, "🎵 Выбери нужный трек из списка ниже:", reply_markup=get_music_keyboard())
 
-    # Выдача конкретной книги при нажатии на её название
+    # Выдача конкретной книги
     elif text.startswith("📖 "):
         book_name = text.replace("📖 ", "")
-        books = user_books.get(chat_id, [])
         found = False
-        for book in books:
+        for book in all_books:
             if book['name'] == book_name:
                 bot.send_document(chat_id, book['file_id'], caption=f"📖 {book['name']}")
                 found = True
@@ -123,12 +123,11 @@ def handle_text(message):
         if not found:
             bot.send_message(chat_id, "Книга не найдена.")
 
-    # Выдача конкретного трека при нажатии на его название
+    # Выдача конкретного трека
     elif text.startswith("🎧 "):
         track_name = text.replace("🎧 ", "")
-        tracks = user_music.get(chat_id, [])
         found = False
-        for track in tracks:
+        for track in all_music:
             if track['name'] == track_name:
                 bot.send_audio(chat_id, track['file_id'], caption=f"🎧 {track['name']}")
                 found = True
@@ -136,7 +135,7 @@ def handle_text(message):
         if not found:
             bot.send_message(chat_id, "Трек не найден.")
 
-    # Если текст не кнопка — ищем погоду в градусах Цельсия (?m)
+    # Прогноз погоды
     else:
         try:
             res = requests.get(f"https://wttr.in/{text}?m&format=3")
