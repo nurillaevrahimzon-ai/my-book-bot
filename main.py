@@ -3,11 +3,32 @@ import requests
 import telebot
 from telebot import types
 from flask import Flask, request
+from supabase import create_client, Client
 
+# Инициализация бота
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 bot = telebot.TeleBot(BOT_TOKEN)
 
 app = Flask(__name__)
+
+# --- ПОДКЛЮЧЕНИЕ К SUPABASE 🔌 ---
+SUPABASE_URL = os.environ.get("SUPABASE_URL")
+SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Функция для сохранения данных об учебе 📝
+def save_study_session(user_id: int, subject: str, duration: int):
+    try:
+        data = {
+            "user_id": user_id,
+            "subject": subject,
+            "duration_minutes": duration
+        }
+        supabase.table("study_sessions").insert(data).execute()
+        return True
+    except Exception as e:
+        print(f"Ошибка сохранения в Supabase: {e}")
+        return False
 
 ADMIN_ID = 7932204371
 
@@ -17,10 +38,9 @@ CATEGORIES = [
     "9 класс", "10 класс", "11 класс", "📚 Внеклассное и Сборники"
 ]
 
-# Структура для хранения: {'5 класс': [{'file_id': ..., 'name': ...}], ...}
 all_books = {cat: [] for cat in CATEGORIES}
 all_music = []
-user_states = {}  # Для запоминания временного файла админа
+user_states = {}
 
 # Главное меню 🏠
 def get_main_keyboard():
@@ -41,6 +61,16 @@ def get_categories_keyboard():
 def start_message(message):
     bot.send_message(message.chat.id, "Привет! Выбери раздел ниже👇", reply_markup=get_main_keyboard())
 
+# Тестовая команда для проверки записи в Supabase 🧪
+@bot.message_handler(commands=['study'])
+def test_study(message):
+    # Сохраняем 30 минут Математики для теста
+    success = save_study_session(message.chat.id, "Математика", 30)
+    if success:
+        bot.reply_to(message, "✅ Тестовая сессия (30 мин, Математика) успешно записана в базу!")
+    else:
+        bot.reply_to(message, "❌ Ошибка при записи в базу данных.")
+
 # 1. Прием PDF от Админа 🔒
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
@@ -55,7 +85,7 @@ def handle_document(message):
         }
         bot.reply_to(
             message, 
-            "📌 Выбери категорию для этой книги:", 
+            "📌 Отлично! Теперь нажми на кнопку с нужным классом ниже, чтобы сохранить книгу:", 
             reply_markup=get_categories_keyboard()
         )
     else:
@@ -71,7 +101,7 @@ def handle_audio(message):
     file_id = message.audio.file_id
     track_name = message.audio.title or message.audio.file_name or "Аудиозапись"
     all_music.append({'file_id': file_id, 'name': track_name})
-    bot.reply_to(message, f"🎵 Трек **«{track_name}»** сохранен!", parse_mode="Markdown")
+    bot.reply_to(message, f"🎵 Трек **«{track_name}»** успешно сохранен!", parse_mode="Markdown")
 
 # 3. Обработка текста и кнопок 💬
 @bot.message_handler(func=lambda message: True)
@@ -79,44 +109,54 @@ def handle_text(message):
     chat_id = message.chat.id
     text = message.text.strip()
 
-    # Сохранение книги в выбранную категорию (для админа) 👑
     if chat_id == ADMIN_ID and chat_id in user_states and text in CATEGORIES:
         file_data = user_states.pop(chat_id)
         all_books[text].append(file_data)
         bot.send_message(
             chat_id, 
-            f"✅ Книга **«{file_data['file_name']}»** добавлена в раздел **{text}**!", 
+            f"✅ Книга **«{file_data['file_name']}»** сохранена в раздел **{text}**!", 
             parse_mode="Markdown", 
             reply_markup=get_main_keyboard()
         )
         return
 
     if text == "🏠 Главное меню":
+        user_states.pop(chat_id, None)
         bot.send_message(chat_id, "Главное меню 🏠", reply_markup=get_main_keyboard())
 
     elif text == "📚 Общие Книги (PDF)":
-        bot.send_message(chat_id, "📖 Выбери класс или раздел:", reply_markup=get_categories_keyboard())
+        bot.send_message(chat_id, "📖 Выбери класс или раздел из списка ниже:", reply_markup=get_categories_keyboard())
 
     elif text in CATEGORIES:
         books_in_cat = all_books[text]
         if not books_in_cat:
-            bot.send_message(chat_id, f"В разделе **{text}** пока нет книг.", parse_mode="Markdown")
+            bot.send_message(
+                chat_id, 
+                f"📭 В разделе **{text}** пока нет доступных книг.", 
+                parse_mode="Markdown",
+                reply_markup=get_categories_keyboard()
+            )
         else:
             keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
             for book in books_in_cat:
                 keyboard.add(types.KeyboardButton(f"📖 {book['name']}"))
             keyboard.add(types.KeyboardButton("🏠 Главное меню"))
-            bot.send_message(chat_id, f"📚 Книги в разделе **{text}**:", parse_mode="Markdown", reply_markup=keyboard)
+            bot.send_message(
+                chat_id, 
+                f"📚 Вот книги, доступные в разделе **{text}**:\nНажми на нужную книгу для скачивания.", 
+                parse_mode="Markdown", 
+                reply_markup=keyboard
+            )
 
     elif text == "🎵 Общая Музыка (MP3)":
         if not all_music:
-            bot.send_message(chat_id, "Список музыки пуст.")
+            bot.send_message(chat_id, "🎵 Список музыки пока пуст.", reply_markup=get_main_keyboard())
         else:
             keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
             for track in all_music:
                 keyboard.add(types.KeyboardButton(f"🎧 {track['name']}"))
             keyboard.add(types.KeyboardButton("🏠 Главное меню"))
-            bot.send_message(chat_id, "🎵 Доступные треки:", reply_markup=keyboard)
+            bot.send_message(chat_id, "🎵 Выбери трек для прослушивания:", reply_markup=keyboard)
 
     elif text.startswith("📖 "):
         b_name = text.replace("📖 ", "")
@@ -125,6 +165,7 @@ def handle_text(message):
                 if book['name'] == b_name:
                     bot.send_document(chat_id, book['file_id'], caption=f"📖 {book['name']}")
                     return
+        bot.send_message(chat_id, "Файл не найден.")
 
     elif text.startswith("🎧 "):
         t_name = text.replace("🎧 ", "")
@@ -132,11 +173,12 @@ def handle_text(message):
             if track['name'] == t_name:
                 bot.send_audio(chat_id, track['file_id'], caption=f"🎧 {track['name']}")
                 return
+        bot.send_message(chat_id, "Аудиозапись не найдена.")
 
     elif text == "💡 Случайный факт":
         try:
             res = requests.get("https://uselessfacts.jsph.pl/api/v2/facts/random")
-            bot.send_message(chat_id, f"💡 **Факт:**\n{res.json().get('text')}", parse_mode="Markdown")
+            bot.send_message(chat_id, f"💡 **Интересный факт:**\n{res.json().get('text')}", parse_mode="Markdown")
         except Exception:
             bot.send_message(chat_id, "Не удалось получить факт.")
 
