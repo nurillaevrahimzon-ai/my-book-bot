@@ -1,92 +1,69 @@
 import os
-from threading import Thread
-from flask import Flask
 import telebot
 from telebot import types
+from flask import Flask, request
 
-# --- 1. ВЕБ-СЕРВЕР DLYA RENDER ---
-app = Flask('')
+# Получаем токен из настроек Render
+BOT_TOKEN = os.environ.get('BOT_TOKEN')
+bot = telebot.TeleBot(BOT_TOKEN)
 
-@app.route('/')
-def home():
-    return 'Bot is running!'
+app = Flask(__name__)
 
-def run():
-    port = int(os.environ.get('PORT', 8080))
-    app.run(host='0.0.0.0', port=port)
+# Главное меню с кнопками 🔘
+def get_main_keyboard():
+    keyboard = types.InlineKeyboardMarkup()
+        
+            # Создаем кнопки
+                btn_books = types.InlineKeyboardButton(text="📚 Книги", callback_data="books")
+                    btn_facts = types.InlineKeyboardButton(text="💡 Факты", callback_data="facts")
+                        btn_weather = types.InlineKeyboardButton(text="🌦️ Погода", callback_data="weather")
+                            btn_music = types.InlineKeyboardButton(text="🎵 Музыка", callback_data="music")
+                                
+                                    # Добавляем их по парам в каждый ряд
+                                        keyboard.add(btn_books, btn_facts)
+                                            keyboard.add(btn_weather, btn_music)
+                                                
+                                                    return keyboard
 
-def keep_alive():
-    Thread(target=run).start()
+                                                    # Обработка команды /start
+                                                    @bot.message_handler(commands=['start'])
+                                                    def start_message(message):
+                                                        bot.send_message(
+                                                                message.chat.id, 
+                                                                        "Привет! Выбери нужный раздел из меню ниже: 👇", 
+                                                                                reply_markup=get_main_keyboard()
+                                                                                    )
 
-keep_alive()
+                                                                                    # Обработка нажатий на кнопки 🖱️
+                                                                                    @bot.callback_query_handler(func=lambda call: True)
+                                                                                    def handle_menu_click(call):
+                                                                                        # Обязательно убираем значок загрузки с кнопки 🔄
+                                                                                            bot.answer_callback_query(call.id)
+                                                                                                
+                                                                                                    if call.data == "books":
+                                                                                                            bot.send_message(call.message.chat.id, "📚 Раздел с PDF-книгами скоро появится!")
+                                                                                                                elif call.data == "facts":
+                                                                                                                        bot.send_message(call.message.chat.id, "💡 Раздел со случайными фактами в разработке!")
+                                                                                                                            elif call.data == "weather":
+                                                                                                                                    bot.send_message(call.message.chat.id, "🌦️ Раздел с погодой скоро будет готов!")
+                                                                                                                                        elif call.data == "music":
+                                                                                                                                                bot.send_message(call.message.chat.id, "🎵 Раздел с музыкой скоро заработает!")
 
-# --- 2. NASTROYKA BOTA ---
-TOKEN = '8725622521:AAE8psytiYFVm6adEELKgnbyIUdENXHDmhs'
-bot = telebot.TeleBot(TOKEN)
+                                                                                                                                                # Маршруты для Webhook Flask 🌐
+                                                                                                                                                @app.route('/' + BOT_TOKEN, methods=['POST'])
+                                                                                                                                                def getMessage():
+                                                                                                                                                    json_string = request.get_data().decode('utf-8')
+                                                                                                                                                        update = telebot.types.Update.de_json(json_string)
+                                                                                                                                                            bot.process_new_updates([update])
+                                                                                                                                                                return "!", 200
 
-# Baza dannykh i sostoyaniya
-books_db = []
-user_states = {}
+                                                                                                                                                                @app.route("/")
+                                                                                                                                                                def webhook():
+                                                                                                                                                                    bot.remove_webhook()
+                                                                                                                                                                        # Твой URL на Render
+                                                                                                                                                                            bot.set_webhook(url='https://my-book-bot-9ga9.onrender.com/' + BOT_TOKEN)
+                                                                                                                                                                                return "Bot is running!", 200
 
-# --- 3. KLAVIATURA (KNOPKI) ---
-def main_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    btn_add = types.KeyboardButton('📥 Добавить книгу')
-    btn_list = types.KeyboardButton('📚 Мои книги')
-    btn_fact = types.KeyboardButton('🎲 Факт о книгах')
-    btn_quiz = types.KeyboardButton('❓ Викторина')
-    markup.add(btn_add, btn_list)
-    markup.add(btn_fact, btn_quiz)
-    return markup
-
-# --- 4. OBROBOTCHIKI ---
-@bot.message_handler(commands=['start'])
-def start_message(message):
-    user_states[message.chat.id] = None
-    bot.send_message(
-        message.chat.id,
-        'Привет! Выбери действие на клавиатуре внизу 👇',
-        reply_markup=main_keyboard()
-    )
-
-@bot.message_handler(func=lambda message: True)
-def handle_text(message):
-    chat_id = message.chat.id
-    text = message.text
-
-    # Нажали кнопку "Добавить книгу"
-    if text == '📥 Добавить книгу':
-        user_states[chat_id] = 'waiting_for_title'
-        bot.send_message(chat_id, 'Напиши название книги и автора:')
-    
-    # Нажали кнопку "Мои книги"
-    elif text == '📚 Мои книги':
-        if not books_db:
-            bot.send_message(chat_id, 'Ваш список книг пока пуст! 📭')
-        else:
-            response = "📖 Ваши книги:\n\n"
-            for i, book in enumerate(books_db, 1):
-                response += f"{i}. {book}\n"
-            bot.send_message(chat_id, response)
-            
-    # Нажали кнопку "Факт"
-    elif text == '🎲 Факт о книгах':
-        bot.send_message(chat_id, '💡 Интересный факт: Самой продаваемой книгой всех времен является Библия!')
-
-    # Нажали кнопку "Викторина"
-    elif text == '❓ Викторина':
-        bot.send_message(chat_id, '❓ Вопрос: Кто написал серию книг о Гарри Поттере?\n(Отправь имя автора)')
-
-    # Сохраняем книгу, если бот ждал название
-    elif user_states.get(chat_id) == 'waiting_for_title':
-        books_db.append(text)
-        user_states[chat_id] = None
-        bot.send_message(chat_id, f'✅ Книга "{text}" успешно добавлена!', reply_markup=main_keyboard())
-
-    else:
-        bot.send_message(chat_id, 'Пожалуйста, выберите кнопку из меню ниже 👇', reply_markup=main_keyboard())
-
-# --- 5. ZAPUSK ---
-if __name__ == '__main__':
-    print('Бот запущен...')
-    bot.polling(non_stop=True)
+                                                                                                                                                                                if __name__ == "__main__":
+                                                                                                                                                                                    app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+                                                                                                                                                                                    
