@@ -17,10 +17,12 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Хранилище активных таймеров пользователей: {user_id: {'subject': ..., 'start_time': ...}}
+# Хранилище активных таймеров пользователей
 user_timers = {}
 
-# Функция для сохранения данных об учебе 📝
+# --- ФУНКЦИИ РАБОТЫ С SUPABASE 💾 ---
+
+# Сохранение сессии учебы 📝
 def save_study_session(user_id: int, subject: str, duration: int):
     try:
         data = {
@@ -31,8 +33,31 @@ def save_study_session(user_id: int, subject: str, duration: int):
         supabase.table("study_sessions").insert(data).execute()
         return True
     except Exception as e:
-        print(f"Ошибка сохранения в Supabase: {e}")
+        print(f"Ошибка сохранения сессии в Supabase: {e}")
         return False
+
+# Сохранение книги в базу 📚
+def save_book_to_db(name: str, category: str, file_id: str):
+    try:
+        data = {
+            "name": name,
+            "category": category,
+            "file_id": file_id
+        }
+        supabase.table("books").insert(data).execute()
+        return True
+    except Exception as e:
+        print(f"Ошибка сохранения книги в Supabase: {e}")
+        return False
+
+# Получение книг по категории из базы 📖
+def get_books_by_category(category: str):
+    try:
+        response = supabase.table("books").select("*").eq("category", category).execute()
+        return response.data
+    except Exception as e:
+        print(f"Ошибка получения книг из Supabase: {e}")
+        return []
 
 ADMIN_ID = 7932204371
 
@@ -41,10 +66,8 @@ CATEGORIES = [
     "9 класс", "10 класс", "11 класс", "📚 Внеклассное и Сборники"
 ]
 
-# Предметы для выбора перед стартом таймера 📚
 SUBJECTS = ["Математика 📐", "Физика 🧲", "Химия 🧪", "Английский 🇬🇧", "История 📜"]
 
-all_books = {cat: [] for cat in CATEGORIES}
 all_music = []
 user_states = {}
 
@@ -75,22 +98,19 @@ def get_categories_keyboard():
 def start_message(message):
     bot.send_message(message.chat.id, "Привет! Выбери раздел ниже👇", reply_markup=get_main_keyboard())
 
-# Обработка нажатий на Inline-кнопки (предметы и стоп) 🔘
+# Обработка нажатий на Inline-кнопки (таймер) 🔘
 @bot.callback_query_handler(func=lambda call: True)
 def handle_inline_clicks(call):
     user_id = call.from_user.id
     
-    # 1. Нажатие на выбор предмета
     if call.data.startswith("start_timer_"):
         subject_name = call.data.replace("start_timer_", "")
         
-        # Запоминаем предмет и время старта ⏱️
         user_timers[user_id] = {
             "subject": subject_name,
             "start_time": datetime.now()
         }
         
-        # Кнопка для остановки таймера
         stop_keyboard = types.InlineKeyboardMarkup()
         stop_keyboard.add(types.InlineKeyboardButton("🛑 Завершить сессию", callback_data="stop_timer"))
         
@@ -102,18 +122,14 @@ def handle_inline_clicks(call):
             reply_markup=stop_keyboard
         )
     
-    # 2. Нажатие на «Завершить сессию» 🛑
     elif call.data == "stop_timer":
         if user_id in user_timers:
             session_info = user_timers.pop(user_id)
             start_time = session_info["start_time"]
             subject = session_info["subject"]
             
-            # Вычисляем длительность в минутах ⏳
             elapsed_seconds = (datetime.now() - start_time).total_seconds()
             duration_minutes = round(elapsed_seconds / 60)
-            
-            # Записываем в базу даже если прошел 0 мин (для теста), ставим минимум 1 мин
             final_minutes = max(1, duration_minutes)
             
             success = save_study_session(user_id, subject, final_minutes)
@@ -172,15 +188,24 @@ def handle_text(message):
     chat_id = message.chat.id
     text = message.text.strip()
 
+    # Сохранение книги в базу Supabase при выборе категории 💾
     if chat_id == ADMIN_ID and chat_id in user_states and text in CATEGORIES:
         file_data = user_states.pop(chat_id)
-        all_books[text].append(file_data)
-        bot.send_message(
-            chat_id, 
-            f"✅ Книга **«{file_data['file_name']}»** сохранена в раздел **{text}**!", 
-            parse_mode="Markdown", 
-            reply_markup=get_main_keyboard()
-        )
+        success = save_book_to_db(file_data['file_name'], text, file_data['file_id'])
+        
+        if success:
+            bot.send_message(
+                chat_id, 
+                f"✅ Книга **«{file_data['file_name']}»** успешно сохранена в базу для раздела **{text}**!", 
+                parse_mode="Markdown", 
+                reply_markup=get_main_keyboard()
+            )
+        else:
+            bot.send_message(
+                chat_id, 
+                "❌ Ошибка при сохранении книги в базу данных.", 
+                reply_markup=get_main_keyboard()
+            )
         return
 
     if text == "🏠 Главное меню":
@@ -201,7 +226,7 @@ def handle_text(message):
         bot.send_message(chat_id, "📖 Выбери класс или раздел из списка ниже:", reply_markup=get_categories_keyboard())
 
     elif text in CATEGORIES:
-        books_in_cat = all_books[text]
+        books_in_cat = get_books_by_category(text)
         if not books_in_cat:
             bot.send_message(
                 chat_id, 
@@ -221,24 +246,18 @@ def handle_text(message):
                 reply_markup=keyboard
             )
 
-    elif text == "🎵 Общая Музыка (MP3)":
-        if not all_music:
-            bot.send_message(chat_id, "🎵 Список музыки пока пуст.", reply_markup=get_main_keyboard())
-        else:
-            keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            for track in all_music:
-                keyboard.add(types.KeyboardButton(f"🎧 {track['name']}"))
-            keyboard.add(types.KeyboardButton("🏠 Главное меню"))
-            bot.send_message(chat_id, "🎵 Выбери трек для прослушивания:", reply_markup=keyboard)
-
     elif text.startswith("📖 "):
         b_name = text.replace("📖 ", "")
-        for cat_list in all_books.values():
-            for book in cat_list:
-                if book['name'] == b_name:
-                    bot.send_document(chat_id, book['file_id'], caption=f"📖 {book['name']}")
-                    return
-        bot.send_message(chat_id, "Файл не найден.")
+        # Ищем файл в базе данных по его названию
+        try:
+            response = supabase.table("books").select("file_id").eq("name", b_name).execute()
+            if response.data:
+                file_id = response.data[0]['file_id']
+                bot.send_document(chat_id, file_id, caption=f"📖 {b_name}")
+            else:
+                bot.send_message(chat_id, "Файл не найден в базе данных.")
+        except Exception as e:
+            bot.send_message(chat_id, "Ошибка при поиске файла.")
 
     elif text.startswith("🎧 "):
         t_name = text.replace("🎧 ", "")
