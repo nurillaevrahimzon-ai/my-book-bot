@@ -4,6 +4,7 @@ import telebot
 from telebot import types
 from flask import Flask, request
 from supabase import create_client, Client
+from datetime import datetime
 
 # Инициализация бота
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
@@ -15,6 +16,9 @@ app = Flask(__name__)
 SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# Хранилище активных таймеров пользователей: {user_id: {'subject': ..., 'start_time': ...}}
+user_timers = {}
 
 # Функция для сохранения данных об учебе 📝
 def save_study_session(user_id: int, subject: str, duration: int):
@@ -32,11 +36,13 @@ def save_study_session(user_id: int, subject: str, duration: int):
 
 ADMIN_ID = 7932204371
 
-# Категории книг 🏫
 CATEGORIES = [
     "5 класс", "6 класс", "7 класс", "8 класс",
     "9 класс", "10 класс", "11 класс", "📚 Внеклассное и Сборники"
 ]
+
+# Предметы для выбора перед стартом таймера 📚
+SUBJECTS = ["Математика 📐", "Физика 🧲", "Химия 🧪", "Английский 🇬🇧", "История 📜"]
 
 all_books = {cat: [] for cat in CATEGORIES}
 all_music = []
@@ -45,8 +51,16 @@ user_states = {}
 # Главное меню 🏠
 def get_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
-    keyboard.row("📚 Общие Книги (PDF)", "💡 Случайный факт")
+    keyboard.row("📚 Общие Книги (PDF)", "⏱️ Учёба (Таймер)")
     keyboard.row("🌦️ Погода", "🎵 Общая Музыка (MP3)")
+    keyboard.row("💡 Случайный факт")
+    return keyboard
+
+# Клавиатура предметов (Inline) 🔘
+def get_subjects_inline_keyboard():
+    keyboard = types.InlineKeyboardMarkup()
+    for subj in SUBJECTS:
+        keyboard.add(types.InlineKeyboardButton(subj, callback_data=f"start_timer_{subj}"))
     return keyboard
 
 # Меню выбора категорий книг 📂
@@ -61,15 +75,64 @@ def get_categories_keyboard():
 def start_message(message):
     bot.send_message(message.chat.id, "Привет! Выбери раздел ниже👇", reply_markup=get_main_keyboard())
 
-# Тестовая команда для проверки записи в Supabase 🧪
-@bot.message_handler(commands=['study'])
-def test_study(message):
-    # Сохраняем 30 минут Математики для теста
-    success = save_study_session(message.chat.id, "Математика", 30)
-    if success:
-        bot.reply_to(message, "✅ Тестовая сессия (30 мин, Математика) успешно записана в базу!")
-    else:
-        bot.reply_to(message, "❌ Ошибка при записи в базу данных.")
+# Обработка нажатий на Inline-кнопки (предметы и стоп) 🔘
+@bot.callback_query_handler(func=lambda call: True)
+def handle_inline_clicks(call):
+    user_id = call.from_user.id
+    
+    # 1. Нажатие на выбор предмета
+    if call.data.startswith("start_timer_"):
+        subject_name = call.data.replace("start_timer_", "")
+        
+        # Запоминаем предмет и время старта ⏱️
+        user_timers[user_id] = {
+            "subject": subject_name,
+            "start_time": datetime.now()
+        }
+        
+        # Кнопка для остановки таймера
+        stop_keyboard = types.InlineKeyboardMarkup()
+        stop_keyboard.add(types.InlineKeyboardButton("🛑 Завершить сессию", callback_data="stop_timer"))
+        
+        bot.edit_message_text(
+            f"⏱️ **Таймер запущен!**\n\nПредмет: **{subject_name}**\nВремя пошло... Удачи в учёбе! 📚",
+            chat_id=call.message.chat.id,
+            message_id=call.message.message_id,
+            parse_mode="Markdown",
+            reply_markup=stop_keyboard
+        )
+    
+    # 2. Нажатие на «Завершить сессию» 🛑
+    elif call.data == "stop_timer":
+        if user_id in user_timers:
+            session_info = user_timers.pop(user_id)
+            start_time = session_info["start_time"]
+            subject = session_info["subject"]
+            
+            # Вычисляем длительность в минутах ⏳
+            elapsed_seconds = (datetime.now() - start_time).total_seconds()
+            duration_minutes = round(elapsed_seconds / 60)
+            
+            # Записываем в базу даже если прошел 0 мин (для теста), ставим минимум 1 мин
+            final_minutes = max(1, duration_minutes)
+            
+            success = save_study_session(user_id, subject, final_minutes)
+            
+            if success:
+                bot.edit_message_text(
+                    f"🎉 **Отличная работа!**\n\nПредмет: **{subject}**\nВремя: **{final_minutes} мин.**\n\nДанные сохранены в базу! 💾",
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id,
+                    parse_mode="Markdown"
+                )
+            else:
+                bot.edit_message_text(
+                    "❌ Не удалось сохранить данные в базу.",
+                    chat_id=call.message.chat.id,
+                    message_id=call.message.message_id
+                )
+        else:
+            bot.answer_callback_query(call.id, "Таймер не был запущен!", show_alert=True)
 
 # 1. Прием PDF от Админа 🔒
 @bot.message_handler(content_types=['document'])
@@ -123,6 +186,16 @@ def handle_text(message):
     if text == "🏠 Главное меню":
         user_states.pop(chat_id, None)
         bot.send_message(chat_id, "Главное меню 🏠", reply_markup=get_main_keyboard())
+
+    elif text == "⏱️ Учёба (Таймер)":
+        if chat_id in user_timers:
+            bot.send_message(chat_id, "⚠️ У тебя уже запущен таймер! Заверши его перед новым стартом.")
+        else:
+            bot.send_message(
+                chat_id, 
+                "📚 Выбери предмет, чтобы начать отсчёт времени:", 
+                reply_markup=get_subjects_inline_keyboard()
+            )
 
     elif text == "📚 Общие Книги (PDF)":
         bot.send_message(chat_id, "📖 Выбери класс или раздел из списка ниже:", reply_markup=get_categories_keyboard())
