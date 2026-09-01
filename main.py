@@ -9,64 +9,44 @@ bot = telebot.TeleBot(BOT_TOKEN)
 
 app = Flask(__name__)
 
+# Словари для хранения списков файлов пользователей
 user_books = {}
 user_music = {}
 
+# Главное меню (кнопки под клавиатурой)
 def get_main_keyboard():
-    keyboard = types.InlineKeyboardMarkup()
-    btn_books = types.InlineKeyboardButton(text="📚 Мои Книги (PDF)", callback_data="books")
-    btn_facts = types.InlineKeyboardButton(text="💡 Случайный факт", callback_data="facts")
-    btn_weather = types.InlineKeyboardButton(text="🌦️ Погода", callback_data="weather")
-    btn_music = types.InlineKeyboardButton(text="🎵 Моя Музыка (MP3)", callback_data="music")
-    keyboard.add(btn_books, btn_facts)
-    keyboard.add(btn_weather, btn_music)
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    keyboard.row("📚 Мои Книги (PDF)", "💡 Случайный факт")
+    keyboard.row("🌦️ Погода", "🎵 Моя Музыка (MP3)")
+    return keyboard
+
+# Меню со списком книг
+def get_books_keyboard(chat_id):
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    books = user_books.get(chat_id, [])
+    for book in books:
+        keyboard.add(types.KeyboardButton(text=f"📖 {book['name']}"))
+    keyboard.add(types.KeyboardButton(text="🏠 Главное меню"))
+    return keyboard
+
+# Меню со списком музыки
+def get_music_keyboard(chat_id):
+    keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    tracks = user_music.get(chat_id, [])
+    for track in tracks:
+        keyboard.add(types.KeyboardButton(text=f"🎧 {track['name']}"))
+    keyboard.add(types.KeyboardButton(text="🏠 Главное меню"))
     return keyboard
 
 @bot.message_handler(commands=['start'])
 def start_message(message):
     bot.send_message(
         message.chat.id, 
-        "Привет! Выбери раздел или отправь мне PDF / MP3 файл! 👇", 
+        "Привет! Выбери раздел ниже или отправь мне PDF / MP3 файл! 👇", 
         reply_markup=get_main_keyboard()
     )
 
-@bot.callback_query_handler(func=lambda call: True)
-def handle_menu_click(call):
-    bot.answer_callback_query(call.id)
-    chat_id = call.message.chat.id
-    
-    if call.data == "facts":
-        try:
-            res = requests.get("https://uselessfacts.jsph.pl/api/v2/facts/random")
-            if res.status_code == 200:
-                fact_text = res.json().get('text')
-                bot.send_message(chat_id, f"💡 **Интересный факт:**\n{fact_text}", parse_mode="Markdown")
-            else:
-                bot.send_message(chat_id, "Попробуй ещё раз!")
-        except Exception:
-            bot.send_message(chat_id, "Ошибка при запросе к API.")
-            
-    elif call.data == "weather":
-        bot.send_message(chat_id, "🌦️ Напиши название города в чат!", parse_mode="Markdown")
-        
-    elif call.data == "books":
-        books = user_books.get(chat_id, [])
-        if not books:
-            bot.send_message(chat_id, "📚 У тебя нет сохранённых PDF-книг. Отправь мне PDF-файл!", parse_mode="Markdown")
-        else:
-            bot.send_message(chat_id, f"📚 Твои книги ({len(books)}):")
-            for book in books:
-                bot.send_document(chat_id, book['file_id'], caption=f"📖 {book['name']}")
-                
-    elif call.data == "music":
-        tracks = user_music.get(chat_id, [])
-        if not tracks:
-            bot.send_message(chat_id, "🎵 У тебя нет сохранённых MP3-треков. Отправь мне MP3-файл!", parse_mode="Markdown")
-        else:
-            bot.send_message(chat_id, f"🎵 Твоя музыка ({len(tracks)}):")
-            for track in tracks:
-                bot.send_audio(chat_id, track['file_id'], caption=f"🎧 {track['name']}")
-
+# Обработка документов (PDF)
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     if message.document.mime_type == 'application/pdf':
@@ -77,10 +57,11 @@ def handle_document(message):
         if chat_id not in user_books:
             user_books[chat_id] = []
         user_books[chat_id].append({'file_id': file_id, 'name': file_name})
-        bot.reply_to(message, f"📚 Книга **«{file_name}»** сохранена!", parse_mode="Markdown")
+        bot.reply_to(message, f"📚 Книга **«{file_name}»** сохранена!", parse_mode="Markdown", reply_markup=get_main_keyboard())
     else:
         bot.reply_to(message, "Пожалуйста, отправь файл в формате PDF.")
 
+# Обработка аудио (MP3)
 @bot.message_handler(content_types=['audio'])
 def handle_audio(message):
     chat_id = message.chat.id
@@ -90,19 +71,81 @@ def handle_audio(message):
     if chat_id not in user_music:
         user_music[chat_id] = []
     user_music[chat_id].append({'file_id': file_id, 'name': track_name})
-    bot.reply_to(message, f"🎵 Трек **«{track_name}»** сохранён!", parse_mode="Markdown")
+    bot.reply_to(message, f"🎵 Трек **«{track_name}»** сохранён!", parse_mode="Markdown", reply_markup=get_main_keyboard())
 
+# Обработка текстовых команд и нажатий на кнопки
 @bot.message_handler(func=lambda message: True)
 def handle_text(message):
-    city = message.text.strip()
-    try:
-        res = requests.get(f"https://wttr.in/{city}?format=3")
-        if res.status_code == 200 and "Unknown location" not in res.text:
-            bot.reply_to(message, f"🌦️ **Погода:**\n{res.text}")
+    chat_id = message.chat.id
+    text = message.text.strip()
+
+    if text == "🏠 Главное меню":
+        bot.send_message(chat_id, "Возвращаемся в главное меню 🏠", reply_markup=get_main_keyboard())
+
+    elif text == "💡 Случайный факт":
+        try:
+            res = requests.get("https://uselessfacts.jsph.pl/api/v2/facts/random")
+            if res.status_code == 200:
+                fact_text = res.json().get('text')
+                bot.send_message(chat_id, f"💡 **Интересный факт:**\n{fact_text}", parse_mode="Markdown")
+            else:
+                bot.send_message(chat_id, "Попробуй ещё раз!")
+        except Exception:
+            bot.send_message(chat_id, "Ошибка при запросе к API.")
+
+    elif text == "🌦️ Погода":
+        bot.send_message(chat_id, "🌦️ Напиши название города в чат (например: *Ташкент*):", parse_mode="Markdown")
+
+    elif text == "📚 Мои Книги (PDF)":
+        books = user_books.get(chat_id, [])
+        if not books:
+            bot.send_message(chat_id, "📚 У тебя нет сохранённых PDF-книг. Отправь мне PDF-файл!", reply_markup=get_main_keyboard())
         else:
-            bot.reply_to(message, f"Не удалось найти город «{city}».")
-    except Exception:
-        bot.reply_to(message, "Ошибка при запросе погоды.")
+            bot.send_message(chat_id, "📚 Выбери нужную книгу из списка ниже:", reply_markup=get_books_keyboard(chat_id))
+
+    elif text == "🎵 Моя Музыка (MP3)":
+        tracks = user_music.get(chat_id, [])
+        if not tracks:
+            bot.send_message(chat_id, "🎵 У тебя нет сохранённых MP3-треков. Отправь мне MP3-файл!", reply_markup=get_main_keyboard())
+        else:
+            bot.send_message(chat_id, "🎵 Выбери нужный трек из списка ниже:", reply_markup=get_music_keyboard(chat_id))
+
+    # Выдача конкретной книги при нажатии на её название
+    elif text.startswith("📖 "):
+        book_name = text.replace("📖 ", "")
+        books = user_books.get(chat_id, [])
+        found = False
+        for book in books:
+            if book['name'] == book_name:
+                bot.send_document(chat_id, book['file_id'], caption=f"📖 {book['name']}")
+                found = True
+                break
+        if not found:
+            bot.send_message(chat_id, "Книга не найдена.")
+
+    # Выдача конкретного трека при нажатии на его название
+    elif text.startswith("🎧 "):
+        track_name = text.replace("🎧 ", "")
+        tracks = user_music.get(chat_id, [])
+        found = False
+        for track in tracks:
+            if track['name'] == track_name:
+                bot.send_audio(chat_id, track['file_id'], caption=f"🎧 {track['name']}")
+                found = True
+                break
+        if not found:
+            bot.send_message(chat_id, "Трек не найден.")
+
+    # Если текст не кнопка — ищем погоду в градусах Цельсия (?m)
+    else:
+        try:
+            res = requests.get(f"https://wttr.in/{text}?m&format=3")
+            if res.status_code == 200 and "Unknown location" not in res.text:
+                bot.reply_to(message, f"🌦️ **Погода:**\n{res.text}")
+            else:
+                bot.reply_to(message, f"Не удалось найти город «{text}».")
+        except Exception:
+            bot.reply_to(message, "Ошибка при запросе погоды.")
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
