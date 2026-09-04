@@ -17,7 +17,7 @@ SUPABASE_URL = os.environ.get("SUPABASE_URL")
 SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# Хранилище активных таймеров пользователей
+# Хранилища активных таймеров и состояний пользователей
 user_timers = {}
 user_states = {}
 
@@ -79,6 +79,8 @@ def get_all_music():
         print(f"Ошибка получения музыки: {e}")
         return []
 
+# --- КЛАВИАТУРЫ ⌨️ ---
+
 # Главное меню 🏠
 def get_main_keyboard():
     keyboard = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -100,12 +102,14 @@ def get_categories_keyboard():
     keyboard.add(types.KeyboardButton("🏠 Главное меню"))
     return keyboard
 
+# --- ОБРАБОТКА КОМАНД И НАЖАТИЙ ---
+
 @bot.message_handler(commands=['start'])
 def start_message(message):
     user_states.pop(message.chat.id, None)
     bot.send_message(message.chat.id, "Привет! Выбери раздел ниже👇", reply_markup=get_main_keyboard())
 
-# Обработка Inline-кнопок таймера 🔘
+# Обработка Inline-кнопки (Таймер) 🔘
 @bot.callback_query_handler(func=lambda call: True)
 def handle_inline_clicks(call):
     user_id = call.from_user.id
@@ -182,20 +186,17 @@ def handle_text(message):
         bot.send_message(chat_id, "Главное меню 🏠", reply_markup=get_main_keyboard())
         return
 
-    # Проверка: ждем ли мы от пользователя город для погоды 🌦️
+    # Проверка: ждем ли мы название города для погоды 🌦️
     if user_states.get(chat_id) == "waiting_for_weather":
         user_states.pop(chat_id, None)
         try:
-            # Делаем красивый запрос погоды с языком и описанием
-            res = requests.get(f"https://wttr.in/{text}?m&format=3")
-            if res.status_code == 200 and "Unknown location" not in res.text:
-                # Получим более подробный прогноз для красоты
-                detailed_res = requests.get(f"https://wttr.in/{text}?format=%l:+%C+%t+(ощущается+как+%f),+ветер:+%w")
-                weather_text = detailed_res.text if detailed_res.status_code == 200 else res.text
-                
+            # ?m -> градусы Цельсия и км/ч, lang=ru -> русский язык
+            detailed_res = requests.get(f"https://wttr.in/{text}?m&lang=ru&format=%l:+%C+%t+(ощущается+как+%f),+ветер:+%w")
+            
+            if detailed_res.status_code == 200 and "Unknown location" not in detailed_res.text:
                 bot.send_message(
                     chat_id, 
-                    f"🌍 **Погода в городе {text.capitalize()}:**\n\n📌 {weather_text}\n\n*Хорошего дня!* ☀️", 
+                    f"🌍 **Погода в городе {text.capitalize()}:**\n\n📌 {detailed_res.text}\n\n*Хорошего дня!* ☀️", 
                     parse_mode="Markdown",
                     reply_markup=get_main_keyboard()
                 )
@@ -205,7 +206,7 @@ def handle_text(message):
             bot.send_message(chat_id, "⚠️ Ошибка при запросе погоды. Попробуйте позже.", reply_markup=get_main_keyboard())
         return
 
-    # Сохранение книги в Supabase 💾
+    # Сохранение книги в Supabase при выборе категории 💾
     if chat_id == ADMIN_ID and user_states.get(chat_id, {}).get('action') == 'save_book' and text in CATEGORIES:
         file_data = user_states.pop(chat_id)
         success = save_book_to_db(file_data['file_name'], text, file_data['file_id'])
@@ -237,7 +238,7 @@ def handle_text(message):
             bot.send_message(chat_id, "🎵 Вот доступные треки:\nНажми на нужный, чтобы послушать:", reply_markup=keyboard)
 
     elif text == "🌦️ Погода":
-        # Включаем режим ожидания города от пользователя
+        # Включаем состояние ожидания города от пользователя
         user_states[chat_id] = "waiting_for_weather"
         
         cancel_kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -292,6 +293,8 @@ def handle_text(message):
 
     else:
         bot.send_message(chat_id, "Я не понял команду. Воспользуйся главным меню 👇", reply_markup=get_main_keyboard())
+
+# --- FLASK ВЕБХУК ДЛЯ RENDER ---
 
 @app.route('/' + BOT_TOKEN, methods=['POST'])
 def getMessage():
