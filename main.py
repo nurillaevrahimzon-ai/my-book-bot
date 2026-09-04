@@ -167,8 +167,19 @@ def handle_audio(message):
         return
 
     file_id = message.audio.file_id
-    track_name = message.audio.title or message.audio.file_name or "Аудиозапись"
     
+    # Пытаемся надежно найти название трека
+    track_name = (
+        message.audio.title 
+        or message.audio.file_name 
+        or message.caption 
+        or "Музыкальный трек"
+    )
+    
+    # Если название слишком длинное, обрезаем для красоты
+    if len(track_name) > 50:
+        track_name = track_name[:47] + "..."
+
     success = save_music_to_db(track_name, file_id)
     if success:
         bot.reply_to(message, f"🎵 Трек **«{track_name}»** успешно сохранен в базу данных!", parse_mode="Markdown")
@@ -311,3 +322,4 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
+
