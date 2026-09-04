@@ -142,24 +142,40 @@ def handle_inline_clicks(call):
         else:
             bot.answer_callback_query(call.id, "Таймер не был запущен!", show_alert=True)
 
-# 1. Прием PDF от Админа 🔒
+# Прием файлов (PDF книги или MP3 документы от Админа) 📁🎵
 @bot.message_handler(content_types=['document'])
 def handle_document(message):
     if message.chat.id != ADMIN_ID:
         bot.reply_to(message, "⛔ Загружать файлы может только администратор.")
         return
 
-    if message.document.mime_type == 'application/pdf':
+    file_name = message.document.file_name or ""
+    mime_type = message.document.mime_type or ""
+
+    # Если это PDF — сохраняем как книгу через категории
+    if mime_type == 'application/pdf' or file_name.endswith('.pdf'):
         user_states[ADMIN_ID] = {
             'action': 'save_book',
             'file_id': message.document.file_id,
-            'file_name': message.document.file_name or "Книга.pdf"
+            'file_name': file_name or "Книга.pdf"
         }
         bot.reply_to(message, "📌 Отлично! Теперь нажми на кнопку с нужным классом ниже, чтобы сохранить книгу:", reply_markup=get_categories_keyboard())
+    
+    # Если это аудиофайл в виде документа (например, MP3 из музыкального бота)
+    elif mime_type in ['audio/mpeg', 'audio/mp3'] or file_name.endswith('.mp3'):
+        track_name = message.caption or file_name.replace('.mp3', '') or "Музыкальный трек"
+        if len(track_name) > 50:
+            track_name = track_name[:47] + "..."
+            
+        success = save_music_to_db(track_name, message.document.file_id)
+        if success:
+            bot.reply_to(message, f"🎵 Трек **«{track_name}»** успешно сохранен в базу музыки!", parse_mode="Markdown")
+        else:
+            bot.reply_to(message, "❌ Ошибка при сохранении трека в базу.")
     else:
-        bot.reply_to(message, "Пожалуйста, отправь файл в формате PDF.")
+        bot.reply_to(message, "⚠️ Этот формат файла не поддерживается (принимаются только PDF книги и MP3 музыка).")
 
-# 2. Прием MP3 от Админа 🎵
+# Прием стандартного аудио от Админа 🎵
 @bot.message_handler(content_types=['audio'])
 def handle_audio(message):
     if message.chat.id != ADMIN_ID:
@@ -167,16 +183,8 @@ def handle_audio(message):
         return
 
     file_id = message.audio.file_id
+    track_name = message.audio.title or message.audio.file_name or message.caption or "Музыкальный трек"
     
-    # Пытаемся надежно найти название трека
-    track_name = (
-        message.audio.title 
-        or message.audio.file_name 
-        or message.caption 
-        or "Музыкальный трек"
-    )
-    
-    # Если название слишком длинное, обрезаем для красоты
     if len(track_name) > 50:
         track_name = track_name[:47] + "..."
 
@@ -201,7 +209,6 @@ def handle_text(message):
     if user_states.get(chat_id) == "waiting_for_weather":
         user_states.pop(chat_id, None)
         try:
-            # ?m -> градусы Цельсия и км/ч, lang=ru -> русский язык
             detailed_res = requests.get(f"https://wttr.in/{text}?m&lang=ru&format=%l:+%C+%t+(ощущается+как+%f),+ветер:+%w")
             
             if detailed_res.status_code == 200 and "Unknown location" not in detailed_res.text:
@@ -249,9 +256,7 @@ def handle_text(message):
             bot.send_message(chat_id, "🎵 Вот доступные треки:\nНажми на нужный, чтобы послушать:", reply_markup=keyboard)
 
     elif text == "🌦️ Погода":
-        # Включаем состояние ожидания города от пользователя
         user_states[chat_id] = "waiting_for_weather"
-        
         cancel_kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
         cancel_kb.add(types.KeyboardButton("🏠 Главное меню"))
         
@@ -322,4 +327,3 @@ def webhook():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get('PORT', 5000)))
-
